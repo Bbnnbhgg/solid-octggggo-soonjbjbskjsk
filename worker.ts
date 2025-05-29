@@ -1,4 +1,3 @@
-
 import { Router } from 'itty-router';
 
 export interface Env {
@@ -116,50 +115,60 @@ async function loadNotesFromGithub(env: Env): Promise<void> {
   }
 }
 
-// Routes
-
+// HTML dashboard at /
 router.get('/', () => {
-  // Dashboard shows titles only in simple HTML
   const html = `<!DOCTYPE html>
-  <html lang="en">
-  <head><meta charset="UTF-8"><title>Notes Dashboard</title></head>
+  <html><head><meta charset="UTF-8"><title>Notes</title></head>
   <body>
-    <h1>Notes Dashboard</h1>
+    <h1>All Notes</h1>
     <ul>
-      ${notes.map(note => `<li>${note.title}</li>`).join('')}
+      ${notes.map(note => `<li><a href="/notes/${note.id}">${note.title}</a></li>`).join('')}
     </ul>
-  </body>
-  </html>`;
-  return new Response(html, {
-    headers: { 'Content-Type': 'text/html; charset=utf-8' },
-  });
+
+    <h2>Add Note</h2>
+    <form method="POST" action="/notes">
+      <input name="title" placeholder="Title" required><br><br>
+      <textarea name="content" placeholder="Content" rows="5" cols="40" required></textarea><br><br>
+      <input name="password" type="password" placeholder="Password" required><br><br>
+      <button type="submit">Post</button>
+    </form>
+  </body></html>`;
+  return new Response(html, { headers: { 'Content-Type': 'text/html' } });
 });
 
-router.get('/notes/:id', (request) => {
-  const userAgent = request.headers.get('user-agent') || '';
-  if (!userAgent.toLowerCase().includes('roblox')) {
-    return new Response('Forbidden', { status: 403 });
-  }
+// View individual note (Roblox user-agents only see content)
+router.get('/notes/:id', (req) => {
+  const note = notes.find(n => n.id === req.params.id);
+  if (!note) return new Response('Not found', { status: 404 });
 
-  const id = request.params.id;
-  const note = notes.find(n => n.id === id);
-  if (!note) {
-    return new Response('Not Found', { status: 404 });
-  }
+  const isRoblox = req.headers.get('user-agent')?.toLowerCase().includes('roblox') ?? false;
 
-  return new Response(note.content, {
-    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-  });
+  const html = `<!DOCTYPE html>
+  <html><head><title>${note.title}</title></head>
+  <body>
+    <h1>${note.title}</h1>
+    ${isRoblox ? `<pre>${note.content}</pre>` : `<p>(Content hidden)</p>`}
+  </body></html>`;
+  return new Response(html, { headers: { 'Content-Type': 'text/html' } });
 });
 
-router.get('/notes', () => {
-  return new Response(JSON.stringify(notes), {
-    headers: { 'Content-Type': 'application/json' },
-  });
-});
-
+// POST /notes - handles JSON or form
 router.post('/notes', async (req, env: Env) => {
-  const body = await req.json();
+  const contentType = req.headers.get('content-type') || '';
+  let body: any;
+
+  if (contentType.includes('application/json')) {
+    body = await req.json();
+  } else if (contentType.includes('application/x-www-form-urlencoded')) {
+    const form = await req.formData();
+    body = {
+      title: form.get('title'),
+      content: form.get('content'),
+      password: form.get('password'),
+    };
+  } else {
+    return new Response('Unsupported content type', { status: 415 });
+  }
 
   if (body.password !== env.NOTES_POST_PASSWORD) {
     return new Response('Unauthorized', { status: 401 });
@@ -183,13 +192,10 @@ router.post('/notes', async (req, env: Env) => {
   notes.push(newNote);
   await storeNotesInGithubFile(env, notes);
 
-  return new Response(JSON.stringify(newNote), {
-    headers: { 'Content-Type': 'application/json' },
-    status: 201,
-  });
+  return Response.redirect('/', 303); // redirect after HTML form post
 });
 
-// Required fetch handler
+// Cloudflare Worker fetch handler
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     await loadNotesFromGithub(env);
