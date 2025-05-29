@@ -18,6 +18,9 @@ interface Note {
 const router = Router();
 let notes: Note[] = [];
 
+const isRobloxScript = (content: string) =>
+  content.includes('game') || content.includes('script');
+
 async function obfuscate(content: string): Promise<string> {
   try {
     const res = await fetch('https://broken-pine-ac7f.hiplitehehe.workers.dev/api/obfuscate', {
@@ -25,6 +28,7 @@ async function obfuscate(content: string): Promise<string> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ script: content }),
     });
+    if (!res.ok) return content;
     const data = await res.json();
     return data.obfuscated || content;
   } catch {
@@ -39,6 +43,7 @@ async function filterText(text: string): Promise<string> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),
     });
+    if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     return data.filtered || text;
   } catch {
@@ -110,8 +115,7 @@ async function loadNotesFromGithub(env: Env): Promise<void> {
   }
 }
 
-// Routes
-
+// Dashboard: show list and form
 router.get('/', () => {
   const html = `
     <html>
@@ -121,33 +125,56 @@ router.get('/', () => {
         <ul>
           ${notes.map(n => `<li><a href="/notes/${n.id}">${n.title}</a></li>`).join('')}
         </ul>
+
+        <h2>New Note</h2>
+        <form method="post" action="/submit">
+          <input type="text" name="title" placeholder="Title" required><br>
+          <textarea name="content" placeholder="Content" rows="10" cols="50" required></textarea><br>
+          <input type="password" name="password" placeholder="Password" required><br>
+          <button type="submit">Post Note</button>
+        </form>
       </body>
     </html>
   `;
   return new Response(html, { headers: { 'Content-Type': 'text/html' } });
 });
 
+// Individual note (only shows content if User-Agent includes 'Roblox')
 router.get('/notes/:id', (req) => {
-  const note = notes.find(n => n.id === req.params.id);
+  const id = req.params?.id;
+  const note = notes.find(n => n.id === id);
   if (!note) return new Response('Not found', { status: 404 });
 
-  const ua = req.headers.get('user-agent') || '';
-  const isAllowed = /roblox/i.test(ua);
+  const userAgent = req.headers.get('User-Agent') || '';
+  const showContent = userAgent.includes('Roblox');
 
-  return new Response(
-    isAllowed ? note.content : '(Content not available)',
-    { headers: { 'Content-Type': 'text/plain' } }
-  );
+  const html = `
+    <html>
+      <head><title>${note.title}</title></head>
+      <body>
+        <h1>${note.title}</h1>
+        ${showContent ? `<pre>${note.content}</pre>` : `<p>Content hidden</p>`}
+        <p><a href="/">Back</a></p>
+      </body>
+    </html>
+  `;
+  return new Response(html, { headers: { 'Content-Type': 'text/html' } });
 });
 
-router.post('/notes', async (req, env: Env) => {
-  const body = await req.json();
-  if (body.password !== env.NOTES_POST_PASSWORD) {
+// Handle HTML form submission
+router.post('/submit', async (req, env: Env) => {
+  const formData = await req.formData();
+  const title = formData.get('title')?.toString() || '';
+  const contentRaw = formData.get('content')?.toString() || '';
+  const password = formData.get('password')?.toString();
+
+  if (password !== env.NOTES_POST_PASSWORD) {
     return new Response('Unauthorized', { status: 401 });
   }
 
-  let { title, content } = body;
-  content = /game|script/.test(content) ? await obfuscate(content) : await filterText(content);
+  const content = /game|script/.test(contentRaw)
+    ? await obfuscate(contentRaw)
+    : await filterText(contentRaw);
 
   const newNote: Note = {
     id: crypto.randomUUID(),
@@ -159,13 +186,10 @@ router.post('/notes', async (req, env: Env) => {
   notes.push(newNote);
   await storeNotesInGithubFile(env, notes);
 
-  return new Response(JSON.stringify(newNote), {
-    headers: { 'Content-Type': 'application/json' },
-    status: 201,
-  });
+  return Response.redirect('/', 302);
 });
 
-// Cloudflare Worker handler
+// Required fetch handler
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     await loadNotesFromGithub(env);
