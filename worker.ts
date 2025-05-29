@@ -1,3 +1,4 @@
+
 import { Router } from 'itty-router';
 
 export interface Env {
@@ -118,65 +119,48 @@ async function loadNotesFromGithub(env: Env): Promise<void> {
 // Routes
 
 router.get('/', () => {
-  const html = `
-    <!DOCTYPE html>
-    <html>
-    <head><title>Post Note</title></head>
-    <body>
-      <h1>Post a Note</h1>
-      <form method="POST" action="/notes" id="noteForm">
-        <label>Title:<br><input type="text" name="title" required></label><br><br>
-        <label>Content:<br><textarea name="content" required></textarea></label><br><br>
-        <label>Password:<br><input type="password" name="password" required></label><br><br>
-        <button type="submit">Submit</button>
-      </form>
-      <script>
-        document.getElementById("noteForm").addEventListener("submit", async e => {
-          e.preventDefault();
-          const form = new FormData(e.target);
-          const res = await fetch("/notes", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(Object.fromEntries(form))
-          });
-          const result = await res.text();
-          alert(res.ok ? "Note posted." : "Error: " + result);
-        });
-      </script>
-    </body>
-    </html>
-  `;
-  return new Response(html, { headers: { 'Content-Type': 'text/html' } });
+  // Dashboard shows titles only in simple HTML
+  const html = `<!DOCTYPE html>
+  <html lang="en">
+  <head><meta charset="UTF-8"><title>Notes Dashboard</title></head>
+  <body>
+    <h1>Notes Dashboard</h1>
+    <ul>
+      ${notes.map(note => `<li>${note.title}</li>`).join('')}
+    </ul>
+  </body>
+  </html>`;
+  return new Response(html, {
+    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+  });
 });
 
-router.get('/dashboard', () => {
-  const html = `
-    <!DOCTYPE html>
-    <html>
-    <head><title>Dashboard</title></head>
-    <body>
-      <h1>Notes</h1>
-      <ul>
-        ${notes.map(note => `<li><a href="/notes/${note.id}">${note.title}</a></li>`).join('')}
-      </ul>
-    </body>
-    </html>
-  `;
-  return new Response(html, { headers: { 'Content-Type': 'text/html' } });
-});
-
-router.get('/notes/:id', ({ params }) => {
-  const note = notes.find(n => n.id === params?.id);
-  if (!note) {
-    return new Response('Not found', { status: 404 });
+router.get('/notes/:id', (request) => {
+  const userAgent = request.headers.get('user-agent') || '';
+  if (!userAgent.toLowerCase().includes('roblox')) {
+    return new Response('Forbidden', { status: 403 });
   }
+
+  const id = request.params.id;
+  const note = notes.find(n => n.id === id);
+  if (!note) {
+    return new Response('Not Found', { status: 404 });
+  }
+
   return new Response(note.content, {
-    headers: { 'Content-Type': 'text/plain' },
+    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+  });
+});
+
+router.get('/notes', () => {
+  return new Response(JSON.stringify(notes), {
+    headers: { 'Content-Type': 'application/json' },
   });
 });
 
 router.post('/notes', async (req, env: Env) => {
   const body = await req.json();
+
   if (body.password !== env.NOTES_POST_PASSWORD) {
     return new Response('Unauthorized', { status: 401 });
   }
@@ -205,10 +189,10 @@ router.post('/notes', async (req, env: Env) => {
   });
 });
 
-// Worker fetch handler
+// Required fetch handler
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    await loadNotesFromGithub(env); // Load notes from GitHub
+    await loadNotesFromGithub(env);
     return router.handle(request, env, ctx);
   },
 };
