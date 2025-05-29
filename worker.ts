@@ -30,6 +30,31 @@ function renderHTML(title: string, body: string) {
     </html>`;
 }
 
+function renderDashboard(notes: Note[], message = '') {
+  const list = notes
+    .map(n => `<li><a href="/notes/${n.id}">${n.title}</a></li>`)
+    .join('\n');
+  return `
+    <html>
+      <head><title>Notes Dashboard</title></head>
+      <body>
+        <h1>Notes</h1>
+        ${message ? `<p style="color:green">${message}</p>` : ''}
+        <ul>${list}</ul>
+        <hr/>
+        <h2>Add a new note</h2>
+        <form method="POST" action="/notes">
+          <label>Title: <input name="title" required /></label><br/>
+          <label>Content:<br/>
+            <textarea name="content" rows="6" cols="40" required></textarea>
+          </label><br/>
+          <label>Password: <input name="password" type="password" required /></label><br/>
+          <button type="submit">Add Note</button>
+        </form>
+      </body>
+    </html>`;
+}
+
 async function storeNotesInGithubFile(env: Env, updatedNotes: Note[]) {
   const url = `https://api.github.com/repos/${env.GITHUB_REPO_OWNER}/${env.GITHUB_REPO_NAME}/contents/notes.json`;
   let sha: string | undefined;
@@ -91,25 +116,16 @@ async function loadNotesFromGithub(env: Env): Promise<void> {
       id,
       ...note,
     }));
+  } else {
+    notes = [];
   }
 }
 
 // ROUTES
 
 router.get('/', async (req, env) => {
-  // Dashboard: list titles as links
   await loadNotesFromGithub(env);
-  const list = notes
-    .map(n => `<li><a href="/notes/${n.id}">${n.title}</a></li>`)
-    .join('\n');
-  const html = `
-    <html>
-      <head><title>Notes Dashboard</title></head>
-      <body>
-        <h1>Notes</h1>
-        <ul>${list}</ul>
-      </body>
-    </html>`;
+  const html = renderDashboard(notes);
   return new Response(html, { headers: { 'Content-Type': 'text/html' } });
 });
 
@@ -123,29 +139,49 @@ router.get('/notes/:id', async (req, env) => {
   if (!note) return new Response('Note not found', { status: 404 });
 
   const ua = req.headers.get('User-Agent') || '';
-  const isAllowedUserAgent = ua.toLowerCase().includes('roblox'); // your special check
+  const isAllowedUserAgent = ua.toLowerCase().includes('roblox');
 
   if (isAllowedUserAgent) {
-    // Return raw content as plain text
     return new Response(note.content, {
       headers: { 'Content-Type': 'text/plain' },
     });
   }
 
-  // Otherwise show HTML with content hidden
   return new Response(renderHTML(note.title, 'Content hidden'), {
     headers: { 'Content-Type': 'text/html' },
   });
 });
 
 router.post('/notes', async (req, env) => {
-  const body = await req.json();
+  // Support form submission (x-www-form-urlencoded)
+  const contentType = req.headers.get('Content-Type') || '';
+  let formData: URLSearchParams | null = null;
+  if (contentType.includes('application/x-www-form-urlencoded')) {
+    const formText = await req.text();
+    formData = new URLSearchParams(formText);
+  } else {
+    // fallback to JSON body
+    try {
+      const json = await req.json();
+      formData = new URLSearchParams(Object.entries(json));
+    } catch {
+      formData = null;
+    }
+  }
 
-  if (body.password !== env.NOTES_POST_PASSWORD) {
+  if (!formData) return new Response('Invalid request body', { status: 400 });
+
+  const password = formData.get('password') || '';
+  if (password !== env.NOTES_POST_PASSWORD) {
     return new Response('Unauthorized', { status: 401 });
   }
 
-  let { title, content } = body;
+  const title = formData.get('title') || '';
+  const content = formData.get('content') || '';
+
+  if (!title || !content) {
+    return new Response('Missing title or content', { status: 400 });
+  }
 
   const newNote: Note = {
     id: crypto.randomUUID(),
@@ -154,12 +190,14 @@ router.post('/notes', async (req, env) => {
     createdAt: new Date().toISOString(),
   };
 
+  await loadNotesFromGithub(env); // refresh notes before pushing
   notes.push(newNote);
   await storeNotesInGithubFile(env, notes);
 
-  return new Response(JSON.stringify(newNote), {
-    headers: { 'Content-Type': 'application/json' },
-    status: 201,
+  // After posting redirect back to / with a success message
+  return new Response(null, {
+    status: 303,
+    headers: { Location: '/?message=Note+added' },
   });
 });
 
