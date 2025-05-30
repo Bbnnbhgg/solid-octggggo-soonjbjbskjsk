@@ -1,27 +1,12 @@
 import { Router } from 'itty-router';
 
-export interface Env {
-  GITHUB_TOKEN: string;
-  GITHUB_REPO_OWNER: string;
-  GITHUB_REPO_NAME: string;
-  GITHUB_BRANCH: string;
-  NOTES_POST_PASSWORD: string;
-}
-
-interface Note {
-  id: string;
-  title: string;
-  content: string;
-  createdAt: string;
-}
-
 const router = Router();
-let notes: Note[] = [];
+let notes = [];
 
-const isRobloxScript = (content: string) =>
+const isRobloxScript = (content) =>
   content.includes('game') || content.includes('script');
 
-async function obfuscate(content: string): Promise<string> {
+async function obfuscate(content) {
   try {
     const res = await fetch('https://broken-pine-ac7f.hiplitehehe.workers.dev/api/obfuscate', {
       method: 'POST',
@@ -50,7 +35,7 @@ async function obfuscate(content: string): Promise<string> {
   }
 }
 
-async function filterText(text: string): Promise<string> {
+async function filterText(text) {
   try {
     const res = await fetch('https://tiny-river-0235.hiplitehehe.workers.dev/', {
       method: 'POST',
@@ -65,9 +50,9 @@ async function filterText(text: string): Promise<string> {
   }
 }
 
-async function storeNotesInGithubFile(env: Env, updatedNotes: Note[]) {
+async function storeNotesInGithubFile(env, updatedNotes) {
   const url = `https://api.github.com/repos/${env.GITHUB_REPO_OWNER}/${env.GITHUB_REPO_NAME}/contents/notes.json`;
-  let sha: string | undefined;
+  let sha;
 
   const getRes = await fetch(url, {
     headers: {
@@ -80,7 +65,7 @@ async function storeNotesInGithubFile(env: Env, updatedNotes: Note[]) {
     sha = existing.sha;
   }
 
-  const notesObject = updatedNotes.reduce<Record<string, Omit<Note, 'id'>>>((acc, note) => {
+  const notesObject = updatedNotes.reduce((acc, note) => {
     const { id, ...rest } = note;
     acc[id] = rest;
     return acc;
@@ -110,7 +95,7 @@ async function storeNotesInGithubFile(env: Env, updatedNotes: Note[]) {
   console.log('DEBUG: Stored notes successfully');
 }
 
-async function loadNotesFromGithub(env: Env): Promise<void> {
+async function loadNotesFromGithub(env) {
   const url = `https://api.github.com/repos/${env.GITHUB_REPO_OWNER}/${env.GITHUB_REPO_NAME}/contents/notes.json`;
   const res = await fetch(url, {
     headers: {
@@ -123,7 +108,7 @@ async function loadNotesFromGithub(env: Env): Promise<void> {
     const data = await res.json();
     const content = atob(data.content);
     const parsed = JSON.parse(content);
-    notes = Object.entries(parsed).map(([id, note]: [string, any]) => ({
+    notes = Object.entries(parsed).map(([id, note]) => ({
       id,
       ...note,
     }));
@@ -136,7 +121,6 @@ async function loadNotesFromGithub(env: Env): Promise<void> {
 
 // Routes
 
-// Dashboard - list titles only with links and post form
 router.get('/', async () => {
   let listHtml = notes
     .map(
@@ -163,7 +147,6 @@ router.get('/', async () => {
   return new Response(html, { headers: { 'Content-Type': 'text/html' } });
 });
 
-// View single note - content shown only if User-Agent contains "roblox" (case-insensitive)
 router.get('/notes/:id', ({ params, headers }) => {
   const id = params.id;
   const note = notes.find((n) => n.id === id);
@@ -190,9 +173,8 @@ router.get('/notes/:id', ({ params, headers }) => {
   return new Response(html, { headers: { 'Content-Type': 'text/html' } });
 });
 
-// POST new note from JSON or form
-router.post('/notes', async (request, env: Env) => {
-  let body: any = {};
+router.post('/notes', async (request, env) => {
+  let body = {};
   const ct = request.headers.get('Content-Type') || '';
 
   if (ct.includes('application/json')) {
@@ -218,7 +200,7 @@ router.post('/notes', async (request, env: Env) => {
     content = await filterText(content);
   }
 
-  const newNote: Note = {
+  const newNote = {
     id: crypto.randomUUID(),
     title,
     content,
@@ -234,7 +216,6 @@ router.post('/notes', async (request, env: Env) => {
     return new Response('Internal Server Error', { status: 500 });
   }
 
-  // Redirect back to dashboard after form submit
   if (ct.includes('application/x-www-form-urlencoded')) {
     return Response.redirect('/', 303);
   }
@@ -246,7 +227,7 @@ router.post('/notes', async (request, env: Env) => {
 });
 
 // Escape HTML helper
-function escapeHtml(text: string): string {
+function escapeHtml(text) {
   return text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -255,9 +236,8 @@ function escapeHtml(text: string): string {
     .replace(/'/g, '&#39;');
 }
 
-// Main fetch handler
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request, env, ctx) {
     await loadNotesFromGithub(env);
     return router.handle(request, env, ctx);
   },
