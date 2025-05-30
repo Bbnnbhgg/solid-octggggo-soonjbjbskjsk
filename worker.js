@@ -2,66 +2,60 @@ import { Router } from 'itty-router';
 
 const router = Router();
 
+// View home page with notes and form
 router.get('/', async (request, env) => {
   const notes = await loadNotesFromGithub(env);
   return renderHomePage(notes);
 });
 
-router.get('/notes/:id', async (request, env) => {
-  const { id } = request.params;
+// View single note
+router.get('/notes/:id', async ({ params, headers }, env) => {
   const notes = await loadNotesFromGithub(env);
-  const note = notes.find(n => n.id === id);
+  const note = notes.find(n => n.id === params.id);
   if (!note) return new Response('Note not found', { status: 404 });
 
-  const ua = request.headers.get('User-Agent') || '';
+  const ua = headers.get('User-Agent') || '';
   const isRoblox = ua.toLowerCase().includes('roblox');
   const content = isRoblox ? note.content : 'Content hidden';
 
   return renderNotePage(note.title, content);
 });
 
+// Create a new note
 router.post('/notes', async (request, env) => {
-  const contentType = request.headers.get('content-type') || '';
-  let formData;
-  if (contentType.includes('application/x-www-form-urlencoded')) {
-    formData = await request.formData();
-  } else {
-    return new Response('Unsupported Content-Type', { status: 415 });
+  const formData = await request.formData();
+  const title = formData.get('title');
+  const content = formData.get('content');
+
+  if (!title || !content) {
+    return new Response('Title and content are required.', { status: 400 });
   }
-
-  const title = formData.get('title') || '';
-  const content = formData.get('content') || '';
-  const password = formData.get('password') || '';
-
-  if (password !== env.NOTES_POST_PASSWORD) {
-    return new Response('Unauthorized', { status: 401 });
-  }
-
-  const finalContent = await processContent(content);
-  const note = {
-    id: crypto.randomUUID(),
-    title,
-    content: finalContent,
-    createdAt: new Date().toISOString()
-  };
 
   const notes = await loadNotesFromGithub(env);
-  notes.push(note);
-  await storeNotesInGithubFile(env, notes);
+  const id = crypto.randomUUID();
+  const processed = await processContent(content);
 
-  return Response.redirect('/', 302);
+  notes.push({ id, title, content: processed });
+
+  try {
+    await storeNotesInGithubFile(env, notes);
+    return new Response(null, {
+      status: 302,
+      headers: { Location: `/notes/${id}` }
+    });
+  } catch (err) {
+    return new Response(`Failed to store note: ${err.message}`, { status: 500 });
+  }
 });
 
-// Fallback route
+// Catch-all
 router.all('*', () => new Response('Not Found', { status: 404 }));
 
 export default {
-  async fetch(request, env) {
-    return router.handle(request, env);
-  }
+  fetch: (request, env, ctx) => router.handle(request, env, ctx)
 };
 
-// --- Helpers below ---
+// ------------------ Helpers ------------------
 
 function renderHomePage(notes) {
   const items = notes.map(n =>
@@ -75,12 +69,12 @@ function renderHomePage(notes) {
     <body>
       <h1>Notes</h1>
       <ul>${items}</ul>
-      <h2>Post a new note</h2>
+
+      <h2>Create New Note</h2>
       <form method="POST" action="/notes">
-        <label>Title: <input name="title" required /></label><br/>
-        <label>Content:<br/><textarea name="content" rows="10" cols="50" required></textarea></label><br/>
-        <label>Password: <input name="password" type="password" required /></label><br/>
-        <button type="submit">Post Note</button>
+        <label>Title:<br><input name="title" required></label><br>
+        <label>Content:<br><textarea name="content" rows="6" cols="40" required></textarea></label><br>
+        <button type="submit">Create Note</button>
       </form>
     </body>
     </html>
