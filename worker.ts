@@ -28,10 +28,12 @@ async function obfuscate(content: string): Promise<string> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ script: content }),
     });
-    if (!res.ok) return content;
+    if (!res.ok) throw new Error(`[obfuscate] HTTP ${res.status}`);
     const data = await res.json();
+    console.log('[obfuscate] Success');
     return data.obfuscated || content;
-  } catch {
+  } catch (e) {
+    console.log('[obfuscate] Failed:', e);
     return content;
   }
 }
@@ -46,7 +48,8 @@ async function filterText(text: string): Promise<string> {
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     return data.filtered || text;
-  } catch {
+  } catch (e) {
+    console.log('[filterText] Failed:', e);
     return text;
   }
 }
@@ -108,118 +111,44 @@ async function loadNotesFromGithub(env: Env): Promise<void> {
     const data = await res.json();
     const content = atob(data.content);
     const parsed = JSON.parse(content);
-    notes = Object.entries(parsed).map(([id, note]: [string, any]) => ({
-      id,
-      ...note,
-    }));
+    notes = Object.entries(parsed).map(([id, note]: [string, any]) => ({ id, ...note }));
+    console.log('[loadNotes] Loaded', notes.length, 'notes.');
   } else {
+    console.warn('[loadNotes] Failed with status:', res.status);
     notes = [];
   }
 }
 
-// Dashboard: list notes + form
 router.get('/', () => {
-  const noteList = notes.map(
-    note => `<li><a href="/notes/${note.id}">${escapeHtml(note.title)}</a></li>`
-  ).join('');
-
   const html = `
-    <!DOCTYPE html>
     <html>
-    <head><title>Notes Dashboard</title></head>
-    <body>
-      <h1>All Notes</h1>
-      <ul>${noteList}</ul>
-
-      <h2>Create a New Note</h2>
-      <form id="noteForm">
-        <p><label>Title:<br><input type="text" name="title" required></label></p>
-        <p><label>Content:<br><textarea name="content" rows="6" required></textarea></label></p>
-        <p><label>Password:<br><input type="password" name="password" required></label></p>
-        <button type="submit">Submit</button>
-      </form>
-
-      <p id="result"></p>
-
-      <script>
-        function escapeHtml(text) {
-          return text.replace(/[&<>"']/g, function(m) {
-            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];
-          });
-        }
-
-        document.getElementById('noteForm').addEventListener('submit', async (e) => {
-          e.preventDefault();
-          const form = e.target;
-          const data = {
-            title: form.title.value,
-            content: form.content.value,
-            password: form.password.value
-          };
-
-          const res = await fetch('/notes', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
-          });
-
-          const result = document.getElementById('result');
-          if (res.ok) {
-            const json = await res.json();
-            result.innerHTML = '✅ Note created: <a href="/notes/' + json.id + '">' + escapeHtml(json.title) + '</a>';
-            form.reset();
-            // Optionally reload page or update note list dynamically
-          } else {
-            result.textContent = '❌ Error: ' + res.status;
-          }
-        });
-      </script>
-    </body>
-    </html>
-  `;
-
+      <head><title>Dashboard</title></head>
+      <body>
+        <h1>Notes</h1>
+        <ul>
+          ${notes.map((n) => `<li><a href="/notes/${n.id}">${n.title}</a></li>`).join('')}
+        </ul>
+      </body>
+    </html>`;
   return new Response(html, { headers: { 'Content-Type': 'text/html' } });
 });
 
-// Show note content only if User-Agent includes "roblox" (case-insensitive)
-router.get('/notes/:id', (req, env: Env) => {
-  const id = req.params.id;
-  const note = notes.find(n => n.id === id);
+router.get('/notes/:id', (req) => {
+  const note = notes.find((n) => n.id === req.params.id);
+  if (!note) return new Response('Note not found', { status: 404 });
 
-  if (!note) {
-    return new Response('Note not found', { status: 404 });
-  }
+  const ua = req.headers.get('User-Agent') || '';
+  const showContent = ua.toLowerCase().includes('roblox');
 
-  const userAgent = req.headers.get('User-Agent') || '';
-  const allowed = userAgent.toLowerCase().includes('roblox');
-
-  if (!allowed) {
-    const html = `
-      <!DOCTYPE html>
-      <html>
-      <head><title>${escapeHtml(note.title)}</title></head>
+  const html = `
+    <html>
+      <head><title>${note.title}</title></head>
       <body>
-        <h1>${escapeHtml(note.title)}</h1>
-        <p>Content hidden</p>
+        <h1>${note.title}</h1>
+        ${showContent ? `<pre>${note.content}</pre>` : '<p>Content hidden</p>'}
         <p><a href="/">Back</a></p>
       </body>
-      </html>
-    `;
-    return new Response(html, { headers: { 'Content-Type': 'text/html' } });
-  }
-
-  // Show content as plaintext (escape HTML)
-  const html = `
-    <!DOCTYPE html>
-    <html>
-    <head><title>${escapeHtml(note.title)}</title></head>
-    <body>
-      <h1>${escapeHtml(note.title)}</h1>
-      <pre>${escapeHtml(note.content)}</pre>
-      <p><a href="/">Back</a></p>
-    </body>
-    </html>
-  `;
+    </html>`;
 
   return new Response(html, { headers: { 'Content-Type': 'text/html' } });
 });
@@ -227,16 +156,20 @@ router.get('/notes/:id', (req, env: Env) => {
 router.post('/notes', async (req, env: Env) => {
   try {
     const body = await req.json();
+    console.log('[POST] New note:', body);
 
     if (body.password !== env.NOTES_POST_PASSWORD) {
+      console.log('[POST] Unauthorized');
       return new Response('Unauthorized', { status: 401 });
     }
 
     let { title, content } = body;
 
     if (isRobloxScript(content)) {
+      console.log('[POST] Obfuscating content');
       content = await obfuscate(content);
     } else {
+      console.log('[POST] Filtering content');
       content = await filterText(content);
     }
 
@@ -249,33 +182,21 @@ router.post('/notes', async (req, env: Env) => {
 
     notes.push(newNote);
     await storeNotesInGithubFile(env, notes);
+    console.log('[POST] Stored to GitHub');
 
     return new Response(JSON.stringify(newNote), {
       headers: { 'Content-Type': 'application/json' },
       status: 201,
     });
   } catch (e) {
-    return new Response(`Error: ${(e as Error).message}`, { status: 500 });
+    console.error('[POST] Error:', e);
+    return new Response('Server error', { status: 500 });
   }
 });
 
-// Simple HTML escape helper
-function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (m) => {
-    switch (m) {
-      case '&': return '&amp;';
-      case '<': return '&lt;';
-      case '>': return '&gt;';
-      case '"': return '&quot;';
-      case "'": return '&#39;';
-      default: return m;
-    }
-  });
-}
-
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    await loadNotesFromGithub(env); // Load notes on every request
+    await loadNotesFromGithub(env);
     return router.handle(request, env, ctx);
   },
 };
