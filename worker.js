@@ -28,8 +28,8 @@ router.post('/notes', async (request, env) => {
   const content = formData.get('content');
   const password = formData.get('password');
 
-  if (!title || !content || !password) {
-    return new Response('Title, content, and password are required.', { status: 400 });
+  if (!title || !content) {
+    return new Response('Title and content are required.', { status: 400 });
   }
 
   if (password !== env.NOTES_POST_PASSWORD) {
@@ -39,16 +39,18 @@ router.post('/notes', async (request, env) => {
   const notes = await loadNotesFromGithub(env);
   const id = crypto.randomUUID();
 
+  const processed = await processContent(content);
+
+  notes.push({ id, title, content: processed });
+
   try {
-    const processed = await processContent(content);
-    notes.push({ id, title, content: processed });
     await storeNotesInGithubFile(env, notes);
     return new Response(null, {
       status: 302,
       headers: { Location: `/notes/${id}` }
     });
   } catch (err) {
-    return new Response(`Processing error: ${err.message}`, { status: 500 });
+    return new Response(`Failed to store note: ${err.message}`, { status: 500 });
   }
 });
 
@@ -108,26 +110,28 @@ function isRobloxScript(text) {
 
 async function processContent(text) {
   if (isRobloxScript(text)) {
-    const res = await fetch('https://broken-pine-ac7f.hiplitehehe.workers.dev/api/obfuscate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ script: text })
-    });
-
-    const responseText = await res.text();
-
-    if (!res.ok) {
-      throw new Error(`Obfuscator API error ${res.status}: ${responseText}`);
-    }
-
+    // Obfuscate
     try {
+      const res = await fetch('https://broken-pine-ac7f.hiplitehehe.workers.dev/api/obfuscate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ script: text })
+      });
+
+      const responseText = await res.text();
+
+      if (!res.ok) {
+        throw new Error(`Obfuscator API error ${res.status}: ${responseText}`);
+      }
+
       const data = JSON.parse(responseText);
       return data.obfuscated || text;
-    } catch {
-      throw new Error(`Failed to parse obfuscator JSON: ${responseText}`);
+    } catch (err) {
+      console.error('Obfuscator error:', err);
+      return text;
     }
-
   } else {
+    // Filter
     try {
       const res = await fetch('https://tiny-river-0235.hiplitehehe.workers.dev/', {
         method: 'POST',
@@ -144,7 +148,8 @@ async function processContent(text) {
       const data = JSON.parse(responseText);
       return data.filtered || text;
     } catch (err) {
-      throw new Error(`Filter failed: ${err.message}`);
+      console.error('Filter error:', err);
+      return text;
     }
   }
 }
