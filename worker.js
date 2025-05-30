@@ -21,7 +21,7 @@ router.get('/notes/:id', async ({ params, headers }, env) => {
   return renderNotePage(note.title, content);
 });
 
-// Create a new note (with password)
+// Create a new note (password required)
 router.post('/notes', async (request, env) => {
   const formData = await request.formData();
   const title = formData.get('title');
@@ -33,7 +33,7 @@ router.post('/notes', async (request, env) => {
   }
 
   if (password !== env.NOTES_POST_PASSWORD) {
-    return new Response('Unauthorized: Incorrect password.', { status: 401 });
+    return new Response('Unauthorized', { status: 401 });
   }
 
   const notes = await loadNotesFromGithub(env);
@@ -53,7 +53,7 @@ router.post('/notes', async (request, env) => {
   }
 });
 
-// Catch-all for unmatched routes
+// Catch-all route
 router.all('*', () => new Response('Not Found', { status: 404 }));
 
 export default {
@@ -103,33 +103,57 @@ function renderNotePage(title, content) {
   return new Response(html, { headers: { 'Content-Type': 'text/html' } });
 }
 
-function isRobloxScript(text) {
-  return text.includes('game') || text.includes('script');
-}
-
 async function processContent(text) {
+  console.log('Processing content:', text);
+
+  function isRobloxScript(text) {
+    const lower = text.toLowerCase();
+    return lower.includes('game') || lower.includes('script') || lower.includes('roblox') || lower.includes('workspace');
+  }
+
   if (isRobloxScript(text)) {
+    console.log('Detected Roblox script, sending to obfuscator API...');
     try {
       const res = await fetch('https://broken-pine-ac7f.hiplitehehe.workers.dev/api/obfuscate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ script: text })
+        body: JSON.stringify({ script: text }),
       });
+
+      if (!res.ok) {
+        console.error('Obfuscator API returned error status:', res.status);
+        return text;
+      }
+
       const data = await res.json();
+      console.log('Obfuscator API response:', data);
       return data.obfuscated || text;
-    } catch {
+
+    } catch (err) {
+      console.error('Error calling obfuscator API:', err);
       return text;
     }
+
   } else {
+    console.log('Not a Roblox script, sending to filter API...');
     try {
       const res = await fetch('https://tiny-river-0235.hiplitehehe.workers.dev/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text })
+        body: JSON.stringify({ text }),
       });
+
+      if (!res.ok) {
+        console.error('Filter API returned error status:', res.status);
+        return text;
+      }
+
       const data = await res.json();
+      console.log('Filter API response:', data);
       return data.filtered || text;
-    } catch {
+
+    } catch (err) {
+      console.error('Error calling filter API:', err);
       return text;
     }
   }
