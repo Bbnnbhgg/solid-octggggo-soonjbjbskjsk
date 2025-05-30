@@ -1,10 +1,11 @@
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url, 'https://dummy'); // ✅ Fix for relative URLs
-    const pathname = url.pathname;
+    // Extract pathname from request.url by removing protocol and domain
+    const fullUrl = request.url;
+    const pathname = fullUrl.replace(/^https?:\/\/[^\/]+/, '') || '/';
 
-    console.log('DEBUG: request.url =', request.url);
-    console.log('DEBUG: url.pathname =', pathname);
+    console.log('DEBUG: request.url =', fullUrl);
+    console.log('DEBUG: pathname =', pathname);
 
     // Route: Home page (list notes + form)
     if (request.method === 'GET' && pathname === '/') {
@@ -63,7 +64,7 @@ export default {
   }
 };
 
-// Helpers
+// Helpers (same as before)
 function renderHomePage(notes) {
   const items = notes.map(n =>
     `<li><a href="/notes/${n.id}">${escapeHtml(n.title)}</a></li>`
