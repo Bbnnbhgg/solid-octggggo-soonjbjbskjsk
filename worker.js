@@ -1,7 +1,10 @@
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url);
+    const url = new URL(request.url, 'https://dummy'); // ✅ Fix for relative URLs
     const pathname = url.pathname;
+
+    console.log('DEBUG: request.url =', request.url);
+    console.log('DEBUG: url.pathname =', pathname);
 
     // Route: Home page (list notes + form)
     if (request.method === 'GET' && pathname === '/') {
