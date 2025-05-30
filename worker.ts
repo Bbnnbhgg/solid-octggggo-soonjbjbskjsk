@@ -134,16 +134,6 @@ async function loadNotesFromGithub(env: Env): Promise<void> {
   }
 }
 
-// Escape HTML helper
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
 // Routes
 
 // Dashboard - list titles only with links and post form
@@ -174,15 +164,15 @@ router.get('/', async () => {
 });
 
 // View single note - content shown only if User-Agent contains "roblox" (case-insensitive)
-router.get('/notes/:id', (request, env) => {
-  const { id } = request.params!;
+router.get('/notes/:id', ({ params, headers }) => {
+  const id = params.id;
   const note = notes.find((n) => n.id === id);
 
   if (!note) {
     return new Response('Note not found', { status: 404 });
   }
 
-  const ua = request.headers.get('User-Agent') || '';
+  const ua = headers.get('User-Agent') || '';
   const allowed = ua.toLowerCase().includes('roblox');
 
   const content = allowed ? note.content : 'Content hidden';
@@ -254,6 +244,16 @@ router.post('/notes', async (request, env: Env) => {
     status: 201,
   });
 });
+
+// Escape HTML helper
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 // Main fetch handler
 export default {
