@@ -21,7 +21,7 @@ router.get('/notes/:id', async ({ params, headers }, env) => {
   return renderNotePage(note.title, content);
 });
 
-// Create a new note
+// Create a new note (requires password)
 router.post('/notes', async (request, env) => {
   const formData = await request.formData();
   const title = formData.get('title');
@@ -38,7 +38,14 @@ router.post('/notes', async (request, env) => {
 
   const notes = await loadNotesFromGithub(env);
   const id = crypto.randomUUID();
-  const processed = await processContent(content);
+
+  let processed;
+  try {
+    processed = await processContent(content);
+  } catch (err) {
+    // Return full error message from obfuscator API here
+    return new Response(`Error processing content: ${err.message}`, { status: 500 });
+  }
 
   notes.push({ id, title, content: processed });
 
@@ -53,7 +60,7 @@ router.post('/notes', async (request, env) => {
   }
 });
 
-// Catch-all
+// Catch-all for other routes
 router.all('*', () => new Response('Not Found', { status: 404 }));
 
 export default {
@@ -109,24 +116,19 @@ function isRobloxScript(text) {
 
 async function processContent(text) {
   if (isRobloxScript(text)) {
-    try {
-      const res = await fetch('https://broken-pine-ac7f.hiplitehehe.workers.dev/api/obfuscate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ script: text })
-      });
+    const res = await fetch('https://broken-pine-ac7f.hiplitehehe.workers.dev/api/obfuscate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ script: text })
+    });
 
-      if (!res.ok) {
-        const errorText = await res.text();
-        return `Obfuscator API error ${res.status}: ${errorText}`;
-      }
-
-      const data = await res.json();
-      return data.obfuscated || text;
-
-    } catch (err) {
-      return `Obfuscator fetch failed: ${err.message}`;
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(`Obfuscator API error ${res.status}: ${errorText}`);
     }
+
+    const data = await res.json();
+    return data.obfuscated || text;
   } else {
     try {
       const res = await fetch('https://tiny-river-0235.hiplitehehe.workers.dev/', {
