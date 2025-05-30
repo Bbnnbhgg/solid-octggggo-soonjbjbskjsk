@@ -1,5 +1,5 @@
 name = "roblox-version-monitor"
-main = "worker.ts"
+main = "worker.js"
 compatibility_date = "2024-04-01"
 
 [vars]
