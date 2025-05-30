@@ -134,6 +134,16 @@ async function loadNotesFromGithub(env: Env): Promise<void> {
   }
 }
 
+// Escape HTML helper
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // Routes
 
 // Dashboard - list titles only with links and post form
@@ -244,16 +254,6 @@ router.post('/notes', async (request, env: Env) => {
     status: 201,
   });
 });
-
-// Escape HTML helper
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 // Main fetch handler
 export default {
