@@ -21,14 +21,19 @@ router.get('/notes/:id', async ({ params, headers }, env) => {
   return renderNotePage(note.title, content);
 });
 
-// Create a new note
+// Create a new note (with password)
 router.post('/notes', async (request, env) => {
   const formData = await request.formData();
   const title = formData.get('title');
   const content = formData.get('content');
+  const password = formData.get('password');
 
-  if (!title || !content) {
-    return new Response('Title and content are required.', { status: 400 });
+  if (!title || !content || !password) {
+    return new Response('Title, content, and password are required.', { status: 400 });
+  }
+
+  if (password !== env.NOTES_POST_PASSWORD) {
+    return new Response('Unauthorized: Incorrect password.', { status: 401 });
   }
 
   const notes = await loadNotesFromGithub(env);
@@ -48,7 +53,7 @@ router.post('/notes', async (request, env) => {
   }
 });
 
-// Catch-all
+// Catch-all for unmatched routes
 router.all('*', () => new Response('Not Found', { status: 404 }));
 
 export default {
@@ -74,6 +79,7 @@ function renderHomePage(notes) {
       <form method="POST" action="/notes">
         <label>Title:<br><input name="title" required></label><br>
         <label>Content:<br><textarea name="content" rows="6" cols="40" required></textarea></label><br>
+        <label>Password:<br><input name="password" type="password" required></label><br>
         <button type="submit">Create Note</button>
       </form>
     </body>
