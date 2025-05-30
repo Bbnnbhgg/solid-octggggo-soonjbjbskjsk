@@ -28,17 +28,10 @@ async function obfuscate(content: string): Promise<string> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ script: content }),
     });
-
-    const text = await res.text(); // try to get raw response
-    try {
-      const data = JSON.parse(text);
-      return data.obfuscated || content;
-    } catch {
-      console.log('[obfuscate] Failed to parse JSON:', text);
-      return content;
-    }
-  } catch (err) {
-    console.log('[obfuscate] Fetch failed:', err);
+    if (!res.ok) return content;
+    const data = await res.json();
+    return data.obfuscated || content;
+  } catch {
     return content;
   }
 }
@@ -50,11 +43,10 @@ async function filterText(text: string): Promise<string> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),
     });
-
+    if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     return data.filtered || text;
-  } catch (err) {
-    console.log('[filterText] Failed:', err);
+  } catch {
     return text;
   }
 }
@@ -99,7 +91,6 @@ async function storeNotesInGithubFile(env: Env, updatedNotes: Note[]) {
 
   if (!putRes.ok) {
     const text = await putRes.text();
-    console.log('[storeNotesInGithubFile] GitHub PUT error:', text);
     throw new Error(`GitHub API error: ${text}`);
   }
 }
@@ -122,72 +113,169 @@ async function loadNotesFromGithub(env: Env): Promise<void> {
       ...note,
     }));
   } else {
-    console.log('[loadNotesFromGithub] Failed to fetch notes');
+    notes = [];
   }
 }
 
-// HTML rendering
-function html(title: string, body: string): Response {
-  return new Response(
-    `<!DOCTYPE html><html><head><title>${title}</title></head><body>${body}</body></html>`,
-    { headers: { 'Content-Type': 'text/html' } }
-  );
-}
-
-// Routes
-
+// Dashboard: list notes + form
 router.get('/', () => {
-  const list = notes.map(note => `<li><a href="/notes/${note.id}">${note.title}</a></li>`).join('');
-  return html('Notes', `<h1>Notes</h1><ul>${list}</ul>`);
+  const noteList = notes.map(
+    note => `<li><a href="/notes/${note.id}">${escapeHtml(note.title)}</a></li>`
+  ).join('');
+
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head><title>Notes Dashboard</title></head>
+    <body>
+      <h1>All Notes</h1>
+      <ul>${noteList}</ul>
+
+      <h2>Create a New Note</h2>
+      <form id="noteForm">
+        <p><label>Title:<br><input type="text" name="title" required></label></p>
+        <p><label>Content:<br><textarea name="content" rows="6" required></textarea></label></p>
+        <p><label>Password:<br><input type="password" name="password" required></label></p>
+        <button type="submit">Submit</button>
+      </form>
+
+      <p id="result"></p>
+
+      <script>
+        function escapeHtml(text) {
+          return text.replace(/[&<>"']/g, function(m) {
+            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];
+          });
+        }
+
+        document.getElementById('noteForm').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const form = e.target;
+          const data = {
+            title: form.title.value,
+            content: form.content.value,
+            password: form.password.value
+          };
+
+          const res = await fetch('/notes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+          });
+
+          const result = document.getElementById('result');
+          if (res.ok) {
+            const json = await res.json();
+            result.innerHTML = '✅ Note created: <a href="/notes/' + json.id + '">' + escapeHtml(json.title) + '</a>';
+            form.reset();
+            // Optionally reload page or update note list dynamically
+          } else {
+            result.textContent = '❌ Error: ' + res.status;
+          }
+        });
+      </script>
+    </body>
+    </html>
+  `;
+
+  return new Response(html, { headers: { 'Content-Type': 'text/html' } });
 });
 
+// Show note content only if User-Agent includes "roblox" (case-insensitive)
 router.get('/notes/:id', (req, env: Env) => {
-  const note = notes.find(n => n.id === req.params.id);
-  if (!note) return new Response('Not found', { status: 404 });
+  const id = req.params.id;
+  const note = notes.find(n => n.id === id);
 
-  const isAllowed = req.headers.get('user-agent')?.toLowerCase().includes('roblox');
-  const content = isAllowed
-    ? `<pre>${note.content}</pre>`
-    : `<p>Content hidden</p>`;
+  if (!note) {
+    return new Response('Note not found', { status: 404 });
+  }
 
-  return html(note.title, `<h1>${note.title}</h1>${content}<p><a href="/">Back</a></p>`);
+  const userAgent = req.headers.get('User-Agent') || '';
+  const allowed = userAgent.toLowerCase().includes('roblox');
+
+  if (!allowed) {
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head><title>${escapeHtml(note.title)}</title></head>
+      <body>
+        <h1>${escapeHtml(note.title)}</h1>
+        <p>Content hidden</p>
+        <p><a href="/">Back</a></p>
+      </body>
+      </html>
+    `;
+    return new Response(html, { headers: { 'Content-Type': 'text/html' } });
+  }
+
+  // Show content as plaintext (escape HTML)
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head><title>${escapeHtml(note.title)}</title></head>
+    <body>
+      <h1>${escapeHtml(note.title)}</h1>
+      <pre>${escapeHtml(note.content)}</pre>
+      <p><a href="/">Back</a></p>
+    </body>
+    </html>
+  `;
+
+  return new Response(html, { headers: { 'Content-Type': 'text/html' } });
 });
 
 router.post('/notes', async (req, env: Env) => {
-  const body = await req.json();
+  try {
+    const body = await req.json();
 
-  if (body.password !== env.NOTES_POST_PASSWORD) {
-    return new Response('Unauthorized', { status: 401 });
+    if (body.password !== env.NOTES_POST_PASSWORD) {
+      return new Response('Unauthorized', { status: 401 });
+    }
+
+    let { title, content } = body;
+
+    if (isRobloxScript(content)) {
+      content = await obfuscate(content);
+    } else {
+      content = await filterText(content);
+    }
+
+    const newNote: Note = {
+      id: crypto.randomUUID(),
+      title,
+      content,
+      createdAt: new Date().toISOString(),
+    };
+
+    notes.push(newNote);
+    await storeNotesInGithubFile(env, notes);
+
+    return new Response(JSON.stringify(newNote), {
+      headers: { 'Content-Type': 'application/json' },
+      status: 201,
+    });
+  } catch (e) {
+    return new Response(`Error: ${(e as Error).message}`, { status: 500 });
   }
-
-  let { title, content } = body;
-
-  if (isRobloxScript(content)) {
-    content = await obfuscate(content);
-  } else {
-    content = await filterText(content);
-  }
-
-  const newNote: Note = {
-    id: crypto.randomUUID(),
-    title,
-    content,
-    createdAt: new Date().toISOString(),
-  };
-
-  notes.push(newNote);
-  await storeNotesInGithubFile(env, notes);
-
-  return new Response(JSON.stringify(newNote), {
-    headers: { 'Content-Type': 'application/json' },
-    status: 201,
-  });
 });
 
-// Worker export
+// Simple HTML escape helper
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (m) => {
+    switch (m) {
+      case '&': return '&amp;';
+      case '<': return '&lt;';
+      case '>': return '&gt;';
+      case '"': return '&quot;';
+      case "'": return '&#39;';
+      default: return m;
+    }
+  });
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    await loadNotesFromGithub(env);
+    await loadNotesFromGithub(env); // Load notes on every request
     return router.handle(request, env, ctx);
   },
 };
