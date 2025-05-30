@@ -1,70 +1,68 @@
+import { Router } from 'itty-router';
+
+const router = Router();
+
+router.get('/', async (request, env) => {
+  const notes = await loadNotesFromGithub(env);
+  return renderHomePage(notes);
+});
+
+router.get('/notes/:id', async (request, env) => {
+  const { id } = request.params;
+  const notes = await loadNotesFromGithub(env);
+  const note = notes.find(n => n.id === id);
+  if (!note) return new Response('Note not found', { status: 404 });
+
+  const ua = request.headers.get('User-Agent') || '';
+  const isRoblox = ua.toLowerCase().includes('roblox');
+  const content = isRoblox ? note.content : 'Content hidden';
+
+  return renderNotePage(note.title, content);
+});
+
+router.post('/notes', async (request, env) => {
+  const contentType = request.headers.get('content-type') || '';
+  let formData;
+  if (contentType.includes('application/x-www-form-urlencoded')) {
+    formData = await request.formData();
+  } else {
+    return new Response('Unsupported Content-Type', { status: 415 });
+  }
+
+  const title = formData.get('title') || '';
+  const content = formData.get('content') || '';
+  const password = formData.get('password') || '';
+
+  if (password !== env.NOTES_POST_PASSWORD) {
+    return new Response('Unauthorized', { status: 401 });
+  }
+
+  const finalContent = await processContent(content);
+  const note = {
+    id: crypto.randomUUID(),
+    title,
+    content: finalContent,
+    createdAt: new Date().toISOString()
+  };
+
+  const notes = await loadNotesFromGithub(env);
+  notes.push(note);
+  await storeNotesInGithubFile(env, notes);
+
+  return Response.redirect('/', 302);
+});
+
+// Fallback route
+router.all('*', () => new Response('Not Found', { status: 404 }));
+
 export default {
   async fetch(request, env) {
-    // Extract pathname from request.url by removing protocol and domain
-    const fullUrl = request.url;
-    const pathname = fullUrl.replace(/^https?:\/\/[^\/]+/, '') || '/';
-
-    console.log('DEBUG: request.url =', fullUrl);
-    console.log('DEBUG: pathname =', pathname);
-
-    // Route: Home page (list notes + form)
-    if (request.method === 'GET' && pathname === '/') {
-      const notes = await loadNotesFromGithub(env);
-      return renderHomePage(notes);
-    }
-
-    // Route: View single note
-    if (request.method === 'GET' && pathname.startsWith('/notes/')) {
-      const id = pathname.split('/notes/')[1];
-      const notes = await loadNotesFromGithub(env);
-      const note = notes.find(n => n.id === id);
-      if (!note) return new Response('Note not found', { status: 404 });
-
-      const ua = request.headers.get('User-Agent') || '';
-      const isRoblox = ua.toLowerCase().includes('roblox');
-      const content = isRoblox ? note.content : 'Content hidden';
-
-      return renderNotePage(note.title, content);
-    }
-
-    // Route: Post new note
-    if (request.method === 'POST' && pathname === '/notes') {
-      const contentType = request.headers.get('content-type') || '';
-      let formData;
-      if (contentType.includes('application/x-www-form-urlencoded')) {
-        formData = await request.formData();
-      } else {
-        return new Response('Unsupported Content-Type', { status: 415 });
-      }
-
-      const title = formData.get('title') || '';
-      const content = formData.get('content') || '';
-      const password = formData.get('password') || '';
-
-      if (password !== env.NOTES_POST_PASSWORD) {
-        return new Response('Unauthorized', { status: 401 });
-      }
-
-      const finalContent = await processContent(content);
-      const note = {
-        id: crypto.randomUUID(),
-        title,
-        content: finalContent,
-        createdAt: new Date().toISOString()
-      };
-
-      const notes = await loadNotesFromGithub(env);
-      notes.push(note);
-      await storeNotesInGithubFile(env, notes);
-
-      return Response.redirect('/', 302);
-    }
-
-    return new Response('Not Found', { status: 404 });
+    return router.handle(request, env);
   }
 };
 
-// Helpers (same as before)
+// --- Helpers below ---
+
 function renderHomePage(notes) {
   const items = notes.map(n =>
     `<li><a href="/notes/${n.id}">${escapeHtml(n.title)}</a></li>`
