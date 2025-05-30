@@ -19,54 +19,49 @@ const router = Router();
 let notes: Note[] = [];
 
 const isRobloxScript = (content: string) =>
-  /game|script/i.test(content);
+  content.includes('game') || content.includes('script');
 
 async function obfuscate(content: string): Promise<string> {
-  console.log('[obfuscate] Starting obfuscation...');
   try {
     const res = await fetch('https://broken-pine-ac7f.hiplitehehe.workers.dev/api/obfuscate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ script: content }),
     });
-    const data = await res.json();
-    console.log('[obfuscate] Result:', data);
-    return data.obfuscated || content;
+
+    const text = await res.text(); // try to get raw response
+    try {
+      const data = JSON.parse(text);
+      return data.obfuscated || content;
+    } catch {
+      console.log('[obfuscate] Failed to parse JSON:', text);
+      return content;
+    }
   } catch (err) {
-    console.log('[obfuscate] Failed:', err);
+    console.log('[obfuscate] Fetch failed:', err);
     return content;
   }
 }
 
-async function loadNotesFromGithub(env: Env) {
-  const url = `https://api.github.com/repos/${env.GITHUB_REPO_OWNER}/${env.GITHUB_REPO_NAME}/contents/notes.json`;
-  console.log('[loadNotesFromGithub] Fetching notes...');
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `token ${env.GITHUB_TOKEN}`,
-      'User-Agent': 'MyNotesApp/1.0',
-    },
-  });
+async function filterText(text: string): Promise<string> {
+  try {
+    const res = await fetch('https://tiny-river-0235.hiplitehehe.workers.dev/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
 
-  if (res.ok) {
     const data = await res.json();
-    const decoded = atob(data.content);
-    const parsed = JSON.parse(decoded);
-    notes = Object.entries(parsed).map(([id, note]: [string, any]) => ({
-      id,
-      ...note,
-    }));
-    console.log(`[loadNotesFromGithub] Loaded ${notes.length} notes`);
-  } else {
-    console.log('[loadNotesFromGithub] Failed to fetch notes:', res.status);
+    return data.filtered || text;
+  } catch (err) {
+    console.log('[filterText] Failed:', err);
+    return text;
   }
 }
 
 async function storeNotesInGithubFile(env: Env, updatedNotes: Note[]) {
   const url = `https://api.github.com/repos/${env.GITHUB_REPO_OWNER}/${env.GITHUB_REPO_NAME}/contents/notes.json`;
   let sha: string | undefined;
-
-  console.log('[storeNotesInGithubFile] Saving notes...');
 
   const getRes = await fetch(url, {
     headers: {
@@ -77,7 +72,6 @@ async function storeNotesInGithubFile(env: Env, updatedNotes: Note[]) {
   if (getRes.ok) {
     const existing = await getRes.json();
     sha = existing.sha;
-    console.log('[storeNotesInGithubFile] Found existing notes, sha:', sha);
   }
 
   const notesObject = updatedNotes.reduce<Record<string, Omit<Note, 'id'>>>((acc, note) => {
@@ -103,78 +97,75 @@ async function storeNotesInGithubFile(env: Env, updatedNotes: Note[]) {
     }),
   });
 
-  const resultText = await putRes.text();
-  console.log('[storeNotesInGithubFile] PUT result:', resultText);
-
   if (!putRes.ok) {
-    throw new Error(`GitHub API error: ${resultText}`);
+    const text = await putRes.text();
+    console.log('[storeNotesInGithubFile] GitHub PUT error:', text);
+    throw new Error(`GitHub API error: ${text}`);
   }
+}
+
+async function loadNotesFromGithub(env: Env): Promise<void> {
+  const url = `https://api.github.com/repos/${env.GITHUB_REPO_OWNER}/${env.GITHUB_REPO_NAME}/contents/notes.json`;
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `token ${env.GITHUB_TOKEN}`,
+      'User-Agent': 'MyNotesApp/1.0',
+    },
+  });
+
+  if (res.ok) {
+    const data = await res.json();
+    const content = atob(data.content);
+    const parsed = JSON.parse(content);
+    notes = Object.entries(parsed).map(([id, note]: [string, any]) => ({
+      id,
+      ...note,
+    }));
+  } else {
+    console.log('[loadNotesFromGithub] Failed to fetch notes');
+  }
+}
+
+// HTML rendering
+function html(title: string, body: string): Response {
+  return new Response(
+    `<!DOCTYPE html><html><head><title>${title}</title></head><body>${body}</body></html>`,
+    { headers: { 'Content-Type': 'text/html' } }
+  );
 }
 
 // Routes
 
 router.get('/', () => {
-  const html = `
-    <html>
-      <head><title>Notes</title></head>
-      <body>
-        <h1>Notes</h1>
-        <ul>
-          ${notes.map(n => `<li><a href="/notes/${n.id}">${n.title}</a></li>`).join('')}
-        </ul>
-        <form method="POST" action="/notes">
-          <input name="password" placeholder="Password" />
-          <input name="title" placeholder="Title" />
-          <textarea name="content" placeholder="Script"></textarea>
-          <button type="submit">Submit</button>
-        </form>
-      </body>
-    </html>
-  `;
-  return new Response(html, { headers: { 'Content-Type': 'text/html' } });
+  const list = notes.map(note => `<li><a href="/notes/${note.id}">${note.title}</a></li>`).join('');
+  return html('Notes', `<h1>Notes</h1><ul>${list}</ul>`);
 });
 
-router.get('/notes/:id', (req) => {
+router.get('/notes/:id', (req, env: Env) => {
   const note = notes.find(n => n.id === req.params.id);
   if (!note) return new Response('Not found', { status: 404 });
 
-  const userAgent = req.headers.get('user-agent') || '';
-  const allowView = /roblox/i.test(userAgent);
+  const isAllowed = req.headers.get('user-agent')?.toLowerCase().includes('roblox');
+  const content = isAllowed
+    ? `<pre>${note.content}</pre>`
+    : `<p>Content hidden</p>`;
 
-  console.log(`[GET /notes/${req.params.id}] UA="${userAgent}" => allowView=${allowView}`);
-
-  if (!allowView) {
-    return new Response(
-      `<html><head><title>${note.title}</title></head><body><h1>${note.title}</h1><p>Content hidden</p><p><a href="/">Back</a></p></body></html>`,
-      { headers: { 'Content-Type': 'text/html' } }
-    );
-  }
-
-  return new Response(note.content, { headers: { 'Content-Type': 'text/plain' } });
+  return html(note.title, `<h1>${note.title}</h1>${content}<p><a href="/">Back</a></p>`);
 });
 
-router.post('/notes', async (req, env) => {
-  const contentType = req.headers.get('content-type') || '';
-  let data: any = {};
+router.post('/notes', async (req, env: Env) => {
+  const body = await req.json();
 
-  if (contentType.includes('application/json')) {
-    data = await req.json();
-  } else if (contentType.includes('application/x-www-form-urlencoded')) {
-    const form = await req.formData();
-    for (const [key, val] of form.entries()) data[key] = val;
-  }
-
-  if (data.password !== env.NOTES_POST_PASSWORD) {
-    console.log('[POST /notes] Unauthorized');
+  if (body.password !== env.NOTES_POST_PASSWORD) {
     return new Response('Unauthorized', { status: 401 });
   }
 
-  let { title, content } = data;
-  console.log('[POST /notes] Received title:', title);
+  let { title, content } = body;
 
   if (isRobloxScript(content)) {
-    console.log('[POST /notes] Detected Roblox script, obfuscating...');
     content = await obfuscate(content);
+  } else {
+    content = await filterText(content);
   }
 
   const newNote: Note = {
@@ -185,15 +176,17 @@ router.post('/notes', async (req, env) => {
   };
 
   notes.push(newNote);
-  console.log('[POST /notes] Storing note with ID:', newNote.id);
   await storeNotesInGithubFile(env, notes);
 
-  return new Response('OK', { status: 201 });
+  return new Response(JSON.stringify(newNote), {
+    headers: { 'Content-Type': 'application/json' },
+    status: 201,
+  });
 });
 
+// Worker export
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    console.log('[fetch] Request:', request.method, request.url);
     await loadNotesFromGithub(env);
     return router.handle(request, env, ctx);
   },
